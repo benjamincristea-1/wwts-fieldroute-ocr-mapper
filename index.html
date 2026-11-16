@@ -1,0 +1,2264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WWTS FieldRoute Map & Work Order Tracker</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Tesseract.js (Client-Side OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
+    #map { height: 100vh; width: 100vw; z-index: 1; background: #e5e7eb; }
+    .ui-overlay { z-index: 1000; }
+
+    /* Remove default Leaflet white box on custom divIcons */
+    .leaflet-div-icon {
+      background: transparent !important;
+      border: none !important;
+    }
+
+    /* Pill Pin Showing Last 4 Digits of WA Work Order at All Times */
+    .wo-pin-wrapper {
+      position: absolute;
+      transform: translate(-50%, -100%);
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+      width: max-content;
+    }
+    .wo-pin-pill {
+      padding: 4px 10px;
+      border-radius: 9999px;
+      border: 2.5px solid #ffffff;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+      font-weight: 900;
+      color: #ffffff;
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: transform 0.15s ease, box-shadow 0.2s ease;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.75);
+    }
+    .wo-pin-wrapper:hover .wo-pin-pill {
+      transform: scale(1.12);
+    }
+    .wo-pin-arrow {
+      width: 0;
+      height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 8px solid #ffffff;
+      margin-top: -1px;
+    }
+
+    /* Hillside Gradient: Blue to Green */
+    .wo-pin-pill.pin-hillside-gradient {
+      background: linear-gradient(135deg, #1d4ed8 0%, #059669 55%, #10b981 100%) !important;
+      border-color: #a7f3d0 !important;
+    }
+    .wo-pin-arrow.arrow-hillside {
+      border-top-color: #10b981 !important;
+    }
+
+    /* Downtown Gradient: Blue to Light Yellow */
+    .wo-pin-pill.pin-downtown-gradient {
+      background: linear-gradient(135deg, #1e40af 0%, #2563eb 42%, #fde047 100%) !important;
+      border-color: #fef08a !important;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.95), 0 0 6px rgba(15,23,42,0.8);
+    }
+    .wo-pin-arrow.arrow-downtown {
+      border-top-color: #fde047 !important;
+    }
+
+    /* Same Building + Hillside Coordinated Gradient (Purple -> Blue -> Green) */
+    .wo-pin-pill.pin-samebldg-hillside {
+      background: linear-gradient(135deg, #9333ea 0%, #2563eb 45%, #10b981 100%) !important;
+      border-color: #d8b4fe !important;
+    }
+
+    /* Same Building + Downtown Coordinated Gradient (Purple -> Blue -> Light Yellow) */
+    .wo-pin-pill.pin-samebldg-downtown {
+      background: linear-gradient(135deg, #9333ea 0%, #2563eb 42%, #fde047 100%) !important;
+      border-color: #fef08a !important;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.95), 0 0 6px rgba(15,23,42,0.8);
+    }
+
+    /* Purple Gradient Glow for Same Address / Same Building Multi-Work Orders */
+    @keyframes purpleGlowPulse {
+      0%, 100% {
+        box-shadow: 0 0 12px 3px rgba(168, 85, 247, 0.95), 0 0 24px 7px rgba(126, 34, 206, 0.65), 0 4px 10px rgba(0,0,0,0.5);
+      }
+      50% {
+        box-shadow: 0 0 20px 6px rgba(216, 180, 254, 1), 0 0 36px 12px rgba(147, 51, 234, 0.9), 0 4px 12px rgba(0,0,0,0.6);
+      }
+    }
+    .wo-pin-pill.same-building-glow {
+      background: linear-gradient(135deg, #c084fc 0%, #9333ea 45%, #581c87 100%);
+      border-color: #f3e8ff !important;
+      animation: purpleGlowPulse 2s infinite ease-in-out;
+    }
+    .wo-pin-arrow.same-building-arrow {
+      border-top-color: #7e22ce;
+      filter: drop-shadow(0 3px 6px rgba(168, 85, 247, 0.95));
+    }
+    .same-building-card-glow {
+      background: linear-gradient(135deg, rgba(88, 28, 135, 0.48) 0%, rgba(30, 41, 59, 0.95) 100%);
+      border-color: #a855f7 !important;
+      box-shadow: 0 0 15px rgba(168, 85, 247, 0.45);
+    }
+    .same-building-badge-glow {
+      background: linear-gradient(135deg, #c084fc 0%, #9333ea 50%, #581c87 100%) !important;
+      box-shadow: 0 0 12px rgba(168, 85, 247, 0.9);
+      border: 1px solid #f3e8ff;
+    }
+
+    /* High-Visibility Stacked Drive Time + Mileage Badge on Route Lines */
+    .line-mileage-wrapper {
+      position: absolute;
+      transform: translate(-50%, -50%) scale(var(--badge-zoom-scale, 1));
+      width: max-content;
+      pointer-events: auto;
+      z-index: 900;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    .line-mileage-wrapper.dimmed-badge {
+      opacity: 0.18 !important;
+    }
+    .line-mileage-wrapper.focused-badge {
+      transform: translate(-50%, -50%) scale(1.14) !important;
+      z-index: 1200 !important;
+    }
+    .line-mileage-badge {
+      background: #facc15;
+      color: #0f172a;
+      border: 3px solid #0f172a;
+      border-radius: 14px;
+      padding: 3px 10px;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.55);
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      line-height: 1.15;
+    }
+    .line-time-top {
+      font-size: 10.5px;
+      font-weight: 900;
+      color: #fef08a;
+      background: #0f172a;
+      padding: 1.5px 7px;
+      border-radius: 9999px;
+      margin-bottom: 2px;
+      letter-spacing: 0.3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .line-miles-bottom {
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 0.3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 font-sans select-none">
+
+  <!-- INTERACTIVE MAP -->
+  <div id="map"></div>
+
+  <!-- TOP BAR: [Points], [2-Point Miles], [Overview All from Home], [Enter Home Base], [Fedex Pickup], [Map Style] -->
+  <div class="ui-overlay fixed top-4 left-4 flex flex-wrap items-center gap-2 max-w-[95vw]">
+    <button onclick="toggleSidebar()" class="bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-2.5 rounded-xl shadow-lg border border-slate-700 font-semibold flex items-center gap-2 text-sm">
+      📍 Points (<span id="pointCount">0</span>)
+    </button>
+
+    <button id="measureBtn" onclick="toggleMeasureMode()" class="bg-white hover:bg-slate-100 text-slate-900 px-3.5 py-2.5 rounded-xl shadow-lg border border-slate-300 font-semibold flex items-center gap-2 text-sm">
+      📏 2-Point Miles: <span id="measureStatus" class="text-xs px-2 py-0.5 rounded bg-slate-200 font-bold">OFF</span>
+    </button>
+
+    <button id="overviewBtn" onclick="toggleOverviewFromHome()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2.5 rounded-xl shadow-lg border border-indigo-400 font-semibold flex items-center gap-2 text-sm">
+      🌐 Overview All (From Home)
+    </button>
+
+    <button onclick="openHomeBaseModal()" class="bg-red-600 hover:bg-red-500 text-white px-3.5 py-2.5 rounded-xl shadow-lg border border-red-400 font-semibold flex items-center gap-1.5 text-sm">
+      🏠 Enter Home Base
+    </button>
+
+    <!-- FEDEX PICKUP POPDOWN MENU -->
+    <div id="fedexMenuContainer" class="relative">
+      <button onclick="toggleFedexDropdown(event)" class="bg-orange-500 hover:bg-orange-400 text-white px-3.5 py-2.5 rounded-xl shadow-lg border border-orange-300 font-semibold flex items-center gap-1.5 text-sm">
+        📦 Fedex Pickup <span class="text-xs">▾</span>
+      </button>
+
+      <div id="fedexDropdown" class="hidden absolute left-0 mt-2 w-72 bg-slate-900/95 backdrop-blur text-white rounded-2xl shadow-2xl border border-orange-400 p-2.5 z-50">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-orange-300 px-2 py-1 border-b border-slate-700 mb-1.5 flex justify-between items-center">
+          <span>Select FedEx Pickup Location</span>
+          <button onclick="addBothFedexLocations()" class="text-[10px] bg-orange-600 hover:bg-orange-500 text-white px-2 py-0.5 rounded font-extrabold">+ Add Both</button>
+        </div>
+
+        <!-- Option 1: Hillside -->
+        <div class="flex items-center justify-between gap-1 p-2 rounded-xl hover:bg-slate-800 transition cursor-pointer" onclick="addFedexLocation('hillside')">
+          <div class="overflow-hidden">
+            <div class="font-bold text-sm flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block shrink-0"></span>
+              <span>Hillside</span>
+              <span id="fedexStatus_hillside" class="hidden text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold">✅ On Map</span>
+            </div>
+            <div class="text-xs text-slate-400 truncate mt-0.5">300 Craig Pl, Hillside, IL 60162</div>
+          </div>
+          <button id="fedexRemove_hillside" onclick="removeFedexLocation('hillside', event)" class="hidden text-xs text-red-400 hover:text-white hover:bg-red-600 px-2 py-1 rounded-lg font-bold shrink-0" title="Remove Hillside Pickup">
+            ✕
+          </button>
+        </div>
+
+        <!-- Option 2: Downtown -->
+        <div class="flex items-center justify-between gap-1 p-2 rounded-xl hover:bg-slate-800 transition cursor-pointer mt-1" onclick="addFedexLocation('downtown')">
+          <div class="overflow-hidden">
+            <div class="font-bold text-sm flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block shrink-0"></span>
+              <span>Downtown</span>
+              <span id="fedexStatus_downtown" class="hidden text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold">✅ On Map</span>
+            </div>
+            <div class="text-xs text-slate-400 truncate mt-0.5">1242 S Canal St, Chicago, IL 60607</div>
+          </div>
+          <button id="fedexRemove_downtown" onclick="removeFedexLocation('downtown', event)" class="hidden text-xs text-red-400 hover:text-white hover:bg-red-600 px-2 py-1 rounded-lg font-bold shrink-0" title="Remove Downtown Pickup">
+            ✕
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <select id="mapStyleSelect" onchange="changeMapStyle(this.value)" class="bg-white text-slate-900 px-3 py-2.5 rounded-xl shadow-lg border border-slate-300 font-semibold text-sm cursor-pointer">
+      <option value="google_road">🗺️ Google Maps</option>
+      <option value="esri_street">🛣️ Esri Street</option>
+      <option value="google_hybrid">🛰️ Satellite</option>
+    </select>
+  </div>
+
+  <!-- TOP CENTER: 2-Point Mileage Banner -->
+  <div id="distanceBanner" class="ui-overlay hidden fixed top-20 left-1/2 -translate-x-1/2 bg-slate-900/95 text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-blue-500 text-sm max-w-lg w-11/12 text-center">
+    <div class="flex justify-between items-start gap-2">
+      <div id="distanceText" class="font-medium flex-1">Click first point on the map...</div>
+      <button onclick="clearRouteLines()" class="text-xs text-slate-400 hover:text-white font-bold">✕</button>
+    </div>
+    <div id="reimbursementText" class="text-xs text-emerald-400 font-semibold mt-1"></div>
+    <div id="routeLinks" class="mt-2 hidden">
+      <a id="gmapsRouteLink" href="#" target="_blank" class="inline-block bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg">
+        ↗️ Open Turn-by-Turn in Google Maps
+      </a>
+    </div>
+  </div>
+
+  <!-- LEFT PANEL: OVERVIEW ALL POINTS TO HOME BASE (COLOR-CODED + FILTERABLE) -->
+  <div id="overviewPanel" class="ui-overlay hidden fixed top-20 left-4 bg-slate-900/95 text-white rounded-2xl shadow-2xl border border-indigo-500 w-84 max-w-[92vw] max-h-[74vh] flex flex-col">
+    <div class="p-3 border-b border-slate-700 flex justify-between items-center bg-indigo-950/60 rounded-t-2xl">
+      <div>
+        <h3 class="font-bold text-sm flex items-center gap-1.5">🌐 Home Base Distance Overview</h3>
+        <p id="overviewHomeLabel" class="text-[11px] text-indigo-300">From Home (3600 W 16th St) • Hover to spotlight line</p>
+      </div>
+      <button onclick="clearRouteLines()" class="text-slate-400 hover:text-white font-bold px-2">✕</button>
+    </div>
+
+    <!-- Color-Coded Route Line Filter Bar ("Same Building" replaces "Standard") -->
+    <div class="px-2.5 py-2 bg-slate-800/90 border-b border-slate-700 flex flex-wrap gap-1 text-[10px] font-extrabold">
+      <button onclick="filterOverviewRoutes('all')" id="ovFilter_all" class="px-2 py-1 rounded-md bg-white text-slate-900 shadow ring-2 ring-white">All Lines</button>
+      <button onclick="filterOverviewRoutes('hillside')" id="ovFilter_hillside" class="px-2 py-1 rounded-md bg-emerald-600/30 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-600/50">🟢 Hillside</button>
+      <button onclick="filterOverviewRoutes('downtown')" id="ovFilter_downtown" class="px-2 py-1 rounded-md bg-yellow-500/30 text-yellow-200 border border-yellow-400/50 hover:bg-yellow-500/50">🟡 Downtown</button>
+      <button onclick="filterOverviewRoutes('pickup')" id="ovFilter_pickup" class="px-2 py-1 rounded-md bg-orange-500/30 text-orange-300 border border-orange-400/50 hover:bg-orange-500/50">🟠 Pickup</button>
+      <button onclick="filterOverviewRoutes('samebuilding')" id="ovFilter_samebuilding" class="px-2 py-1 rounded-md bg-purple-600/30 text-purple-200 border border-purple-400/50 hover:bg-purple-600/50">🟣 Same Building</button>
+    </div>
+
+    <div id="overviewList" class="p-3 overflow-y-auto space-y-2 text-xs flex-1"></div>
+  </div>
+
+  <!-- BOTTOM CENTER: UNDO DELETE POP-UP TOAST (WITH CTRL+Z SUPPORT) -->
+  <div id="undoToast" class="ui-overlay hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-2xl border-2 border-amber-400 flex items-center gap-4 text-sm font-semibold transition-all duration-200">
+    <span id="undoToastText">🗑️ Deleted successfully!</span>
+    <button onclick="undoLastDelete()" class="bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold px-3 py-1 rounded-lg text-xs shadow">
+      ↩️ Undo (Ctrl+Z)
+    </button>
+    <button onclick="hideUndoToast()" class="text-slate-400 hover:text-white font-bold text-xs">✕</button>
+  </div>
+
+  <!-- BOTTOM LEFT: [Add Point] Button -->
+  <div class="ui-overlay fixed bottom-6 left-4 flex flex-col gap-2">
+    <button onclick="openAddModal()" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-xl shadow-xl font-bold flex items-center gap-2 text-base border border-blue-400">
+      ➕ Add Work Order (Screenshot / Manual)
+    </button>
+  </div>
+
+  <!-- BOTTOM RIGHT: [Color Key] Legend -->
+  <div class="ui-overlay fixed bottom-6 right-4 bg-white/95 backdrop-blur px-4 py-3 rounded-xl shadow-xl border border-slate-300 text-xs text-slate-800 space-y-1">
+    <div class="font-bold uppercase tracking-wider text-slate-500 mb-1">Pin & Route Line Color Key</div>
+    <div class="flex items-center gap-2">
+      <span class="w-4 h-3 rounded-full inline-block" style="background: linear-gradient(135deg, #1d4ed8, #10b981);"></span>
+      <b>Blue→Green Pin / Green Line:</b> Hillside FedEx WO
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="w-4 h-3 rounded-full inline-block border border-slate-400" style="background: linear-gradient(135deg, #1e40af, #fde047);"></span>
+      <b>Blue→Yellow Pin / Gold Line:</b> Downtown FedEx WO
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="w-4 h-3 rounded-full inline-block" style="background: linear-gradient(135deg, #9333ea, #10b981, #fde047); box-shadow: 0 0 6px #a855f7;"></span>
+      <b>Purple Glow + Hub Color:</b> Same Building (Hillside/Downtown)
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="w-4 h-3 rounded-full bg-orange-500 inline-block"></span>
+      <b>Orange (HILL / DTWN):</b> FedEx Pickup • <span class="w-3 h-3 rounded-full bg-red-600 inline-block"></span> <b>Red:</b> Home
+    </div>
+  </div>
+
+  <!-- RIGHT DRAWER: "All Points" Pop-Out List -->
+  <div id="pointsSidebar" class="ui-overlay fixed top-0 right-0 h-full w-80 max-w-full bg-slate-900/95 text-white shadow-2xl border-l border-slate-700 transform translate-x-full transition-transform duration-300 flex flex-col">
+    <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+      <div>
+        <h2 class="font-bold text-lg">All Points</h2>
+        <p class="text-xs text-slate-400">Click any point for full details</p>
+      </div>
+      <button onclick="toggleSidebar()" class="text-slate-400 hover:text-white text-xl font-bold px-2">✕</button>
+    </div>
+
+    <!-- Sync / Backup Bar -->
+    <div class="px-3 py-2 bg-slate-800 border-b border-slate-700 flex gap-1.5 text-xs">
+      <button onclick="exportPointsJSON()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-1.5 rounded font-medium">⬇️ Export</button>
+      <label class="flex-1 bg-slate-700 hover:bg-slate-600 py-1.5 rounded font-medium text-center cursor-pointer">
+        ⬆️ Import
+        <input type="file" accept=".json" onchange="importPointsJSON(event)" class="hidden" />
+      </label>
+      <button onclick="resetDemoPoints()" class="bg-slate-700 hover:bg-red-700 px-2 py-1.5 rounded font-medium" title="Reset Demo">↺</button>
+    </div>
+
+    <div id="pointsList" class="flex-1 overflow-y-auto p-3 space-y-2"></div>
+  </div>
+
+  <!-- MODAL 1: ADD POINT (Upload WWTS Screenshot Auto-Feed OR Manual) -->
+  <div id="addModal" class="ui-overlay hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 text-slate-900">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-bold">Add WWTS Work Order</h3>
+        <button onclick="closeAddModal()" class="text-slate-400 hover:text-slate-700 font-bold text-lg">✕</button>
+      </div>
+
+      <!-- Auto-Toggle -->
+      <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-3 cursor-pointer bg-slate-100 p-2.5 rounded-lg">
+        <input type="checkbox" id="autoPlotToggle" checked class="w-4 h-4 accent-blue-600 rounded" />
+        <span>⚡ Auto-add & plot pin on map immediately after screenshot upload</span>
+      </label>
+
+      <!-- Auto-Fed Screenshot Dropzone -->
+      <label id="dropZone" class="border-2 border-dashed border-blue-400 bg-blue-50/50 hover:bg-blue-50 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition mb-4">
+        <span class="text-3xl mb-2">📱</span>
+        <span class="font-bold text-blue-700 text-sm text-center">Upload WWTS Screenshot, Drag & Drop, or Ctrl+V</span>
+        <span class="text-xs text-slate-500 mt-1 text-center">Automatically captures top WA#, Address & Contact Info</span>
+        <input type="file" id="screenshotInput" accept="image/*" class="hidden" onchange="handleScreenshotUpload(event.target.files[0])" />
+      </label>
+
+      <!-- Progress Bar & Status -->
+      <div id="ocrStatusBox" class="hidden mb-4">
+        <div id="ocrStatusText" class="text-xs font-semibold text-blue-700 mb-1">Reading WWTS work order screenshot...</div>
+        <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+          <div id="ocrProgressBar" class="bg-blue-600 h-2 transition-all duration-200" style="width: 10%"></div>
+        </div>
+      </div>
+
+      <div class="flex justify-between items-center pt-3 border-t border-slate-200">
+        <span class="text-xs text-slate-500">Or enter work order manually:</span>
+        <button onclick="openDetailModal(null)" class="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-semibold">
+          ✍️ Manual Entry
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: FULL WORK ORDER DETAILS & NOTES FORM -->
+  <div id="detailModal" class="ui-overlay hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-xl w-full max-h-[92vh] flex flex-col text-slate-900">
+      <!-- Header -->
+      <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl">
+        <div class="flex items-center gap-2">
+          <span id="modalBadge" class="px-2.5 py-1 rounded-full text-xs font-extrabold text-white bg-blue-600">0000</span>
+          <h3 id="modalTitle" class="font-bold text-base truncate max-w-[210px] sm:max-w-xs">Work Order Details</h3>
+        </div>
+        <div class="flex items-center gap-2">
+          <a id="modalNavLink" href="#" target="_blank" class="hidden bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold">
+            🧭 Navigate
+          </a>
+          <button type="button" onclick="focusNotes()" class="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-3 py-1 rounded-lg text-xs font-bold">
+            📝 Notes
+          </button>
+          <button type="button" onclick="closeDetailModal()" class="text-slate-400 hover:text-slate-700 font-bold px-2 text-lg">✕</button>
+        </div>
+      </div>
+
+      <!-- Same-Building Alert Banner inside Modal (Hidden unless part of a multi-WO building) -->
+      <div id="sameBuildingModalBanner" class="hidden bg-gradient-to-r from-purple-700 via-fuchsia-700 to-indigo-800 text-white px-4 py-2 text-xs font-bold flex items-center justify-between">
+        <span id="sameBuildingModalText">🏢 Same Building Alert: Multiple work orders at this address!</span>
+      </div>
+
+      <!-- Scrollable Form Matching WWTS App Screen + Prototype Fields -->
+      <form id="woForm" onsubmit="saveWorkOrder(event)" class="p-4 overflow-y-auto space-y-3 text-sm flex-1 select-text">
+        <input type="hidden" id="wo_id" />
+        <input type="hidden" id="wo_lat" />
+        <input type="hidden" id="wo_lng" />
+
+        <!-- Screenshot Preview Box -->
+        <div id="screenshotPreviewBox" class="hidden bg-slate-100 p-2.5 rounded-xl border border-slate-300">
+          <div class="flex justify-between items-center mb-1.5">
+            <span class="text-xs font-bold text-slate-700">📸 Uploaded Work Order Screenshot</span>
+            <button type="button" onclick="document.getElementById('screenshotPreviewBox').classList.add('hidden')" class="text-xs text-slate-500 hover:text-slate-800">Hide</button>
+          </div>
+          <img id="screenshotPreviewImg" src="" alt="Screenshot" class="max-h-44 w-auto mx-auto rounded border border-slate-300 object-contain bg-black" />
+        </div>
+
+        <div class="grid grid-cols-3 gap-2.5">
+          <div class="col-span-2">
+            <label class="block text-xs font-bold text-slate-600 mb-1">Pin Type (Color Key)</label>
+            <select id="wo_category" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 font-medium">
+              <option value="business">🔵 Work Order (Uses Hillside/Downtown/Building Gradient)</option>
+              <option value="home">🔴 Red: Home Base Location</option>
+              <option value="walmart">🟠 Orange: FedEx Pickup / Parts Drop</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Scheduled Time</label>
+            <input type="text" id="wo_sched" placeholder="11/17 10:30 AM" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        </div>
+
+        <!-- ROW: Work Order # | FedEx Package Last 4 Digits | Site Code / Customer Ticket # -->
+        <div class="grid grid-cols-3 gap-2.5">
+          <div>
+            <label class="block text-xs font-bold text-blue-700 mb-1">Work Order # (WA) *</label>
+            <input type="text" id="wo_number" placeholder="e.g. WA11204519" class="w-full border-2 border-blue-400 rounded-lg px-2.5 py-1.5 font-bold" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-orange-600 mb-1">📦 FedEx Pkg # (Last 4)</label>
+            <input type="text" id="wo_fedex_pkg" maxlength="4" placeholder="e.g. 9412" class="w-full border-2 border-orange-400 bg-orange-50/40 rounded-lg px-2.5 py-1.5 font-extrabold text-slate-900 tracking-wider" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Site Code / Ticket #</label>
+            <input type="text" id="wo_ticket" placeholder="e.g. 470192834" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        </div>
+
+        <!-- FEDEX PICKUP HUB CHECKBOXES (Mutually Exclusive: Hillside vs Downtown) -->
+        <div class="bg-slate-100 p-2.5 rounded-xl border border-slate-300 flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-bold text-slate-700">📦 FedEx Part Pickup Hub (Colors Pin & Route Line):</span>
+          <div class="flex items-center gap-3">
+            <label class="inline-flex items-center gap-1.5 cursor-pointer px-2.5 py-1 rounded-lg text-xs font-extrabold text-white shadow-sm" style="background: linear-gradient(135deg, #1d4ed8, #10b981);">
+              <input type="checkbox" id="wo_hub_hillside" onchange="handleFedexHubCheckbox('hillside')" class="w-4 h-4 accent-emerald-600 rounded cursor-pointer" />
+              <span>Hillside (Blue→Green)</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5 cursor-pointer px-2.5 py-1 rounded-lg text-xs font-extrabold text-slate-950 border border-yellow-500 shadow-sm" style="background: linear-gradient(135deg, #60a5fa, #fde047);">
+              <input type="checkbox" id="wo_hub_downtown" onchange="handleFedexHubCheckbox('downtown')" class="w-4 h-4 accent-yellow-500 rounded cursor-pointer" />
+              <span>Downtown (Blue→Yellow)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2.5">
+          <div class="col-span-2">
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-xs font-bold text-slate-600">Customer Address *</label>
+              <button type="button" onclick="enableMapPickMode()" class="text-[11px] text-blue-600 hover:underline font-semibold">
+                🎯 Pick spot on map
+              </button>
+            </div>
+            <input type="text" id="wo_address" required placeholder="e.g. 233 S Wacker Dr" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Additional Address (Floor/Suite)</label>
+            <input type="text" id="wo_address2" placeholder="e.g. 44th Floor" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">City *</label>
+            <input type="text" id="wo_city" required placeholder="Chicago" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">State *</label>
+            <input type="text" id="wo_state" required value="IL" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Zip Code</label>
+            <input type="text" id="wo_zip" placeholder="60606" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 pt-1 border-t border-slate-100">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Contact Name</label>
+            <input type="text" id="wo_name" placeholder="e.g. Jordan Mercer" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Contact Email Address</label>
+            <div class="flex gap-1.5">
+              <input type="text" id="wo_email" placeholder="jmercer@apexfin.com" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+              <button type="button" id="copyEmailBtn" onclick="copyContactEmail()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 flex items-center gap-1 shadow-sm" title="Copy Email with 1 Click">
+                📋 Copy
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Contact Phone</label>
+            <input type="tel" id="wo_phone" placeholder="312-555-0192" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Contact 2nd Phone</label>
+            <input type="tel" id="wo_phone2" placeholder="Optional" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Alternate Contact Name</label>
+            <input type="text" id="wo_alt_name" placeholder="Backup Contact" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">Alternate Contact 2nd Phone</label>
+            <input type="tel" id="wo_alt_phone" placeholder="Backup Phone" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        </div>
+
+        <!-- Technician Notes -->
+        <div class="pt-2 border-t border-slate-200">
+          <label class="block text-xs font-bold text-amber-800 mb-1">📝 Notes (Add your notes to work order)</label>
+          <textarea id="wo_notes" rows="3" placeholder="Parts needed, freight elevator access, server rack location, SLA window..." class="w-full border border-amber-300 bg-amber-50/40 rounded-lg p-2.5"></textarea>
+        </div>
+
+        <div class="flex justify-between items-center pt-3 border-t border-slate-200">
+          <button type="button" id="deleteBtn" onclick="deleteCurrentPoint()" class="text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg text-xs font-bold hidden">
+            🗑️ Delete Point
+          </button>
+          <div class="flex gap-2 ml-auto">
+            <button type="button" onclick="closeDetailModal()" class="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 font-semibold">Cancel</button>
+            <button type="submit" id="saveBtn" class="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold shadow">
+              💾 Save & Plot Pin
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // --- 1. BUILT-IN CHICAGOLAND COORDINATE FALLBACK DICTIONARY ---
+    const chicagolandCities = {
+      "north lawndale": [41.8591, -87.7153],
+      "hillside": [41.8698, -87.8936],
+      "chicago": [41.8789, -87.6359],
+      "cicero": [41.8456, -87.7539],
+      "park ridge": [42.0111, -87.8406],
+      "homer glen": [41.6000, -87.9381],
+      "south holland": [41.6009, -87.6067],
+      "oak lawn": [41.7199, -87.7479],
+      "tinley park": [41.5731, -87.7845],
+      "joliet": [41.5250, -88.0817],
+      "hammond": [41.5834, -87.5000],
+      "oak park": [41.8850, -87.7845],
+      "elmhurst": [41.8995, -87.9403],
+      "evanston": [42.0451, -87.6877],
+      "orland park": [41.6303, -87.8539],
+      "calumet city": [41.6156, -87.5295],
+      "lansing": [41.5648, -87.5389],
+      "homewood": [41.5573, -87.6656],
+      "harvey": [41.6100, -87.6467],
+      "blue island": [41.6572, -87.6800],
+      "downers grove": [41.8089, -88.0112],
+      "naperville": [41.7508, -88.1535],
+      "schaumburg": [42.0334, -88.0834],
+      "des plaines": [42.0334, -87.8834],
+      "skokie": [42.0324, -87.7416],
+      "bolingbrook": [41.6986, -88.0684]
+    };
+
+    // North Lawndale Home Base at 3600 W 16th St, Chicago, IL 60623
+    const NORTH_LAWNDALE_HOME = {
+      id: 'pt-home',
+      category: 'home',
+      address: '3600 W 16th St',
+      address2: 'North Lawndale Home Base',
+      city: 'Chicago',
+      state: 'IL',
+      zip: '60623',
+      lat: 41.8591,
+      lng: -87.7153,
+      woNumber: 'HOME',
+      fedexPkg: '',
+      fedexHub: '',
+      ticket: 'BASE',
+      sched: '',
+      name: 'North Lawndale Home Base',
+      phone: '',
+      phone2: '',
+      email: '',
+      altName: '',
+      altPhone: '',
+      notes: 'Main Home Base at 3600 W 16th St, Chicago, IL 60623 (North Lawndale).'
+    };
+
+    // Dedicated FedEx Pickup Locations (Hillside & Downtown)
+    const FEDEX_LOCATIONS = {
+      hillside: {
+        id: 'pt-fedex-hillside',
+        category: 'walmart',
+        address: '300 Craig Pl',
+        address2: 'FedEx Pickup - Hillside',
+        city: 'Hillside',
+        state: 'IL',
+        zip: '60162',
+        lat: 41.8698,
+        lng: -87.8936,
+        woNumber: 'FDX-HILL',
+        fedexPkg: '',
+        fedexHub: 'hillside',
+        ticket: 'FEDEX-HILLSIDE',
+        sched: 'Parts Pickup',
+        name: 'FedEx Ship Center - Hillside',
+        phone: '800-463-3339',
+        phone2: '',
+        email: '',
+        altName: 'Hold at Location Desk',
+        altPhone: '',
+        notes: 'FedEx Pickup Location (Hillside): 300 Craig Pl, Hillside, IL 60162.'
+      },
+      downtown: {
+        id: 'pt-fedex-downtown',
+        category: 'walmart',
+        address: '1242 S Canal St',
+        address2: 'FedEx Pickup - Downtown',
+        city: 'Chicago',
+        state: 'IL',
+        zip: '60607',
+        lat: 41.8665,
+        lng: -87.6395,
+        woNumber: 'FDX-DTWN',
+        fedexPkg: '',
+        fedexHub: 'downtown',
+        ticket: 'FEDEX-DOWNTOWN',
+        sched: 'Parts Pickup',
+        name: 'FedEx Ship Center - Downtown',
+        phone: '800-463-3339',
+        phone2: '',
+        email: '',
+        altName: 'Hold at Location Desk',
+        altPhone: '',
+        notes: 'FedEx Pickup Location (Downtown Chicago): 1242 S Canal St, Chicago, IL 60607.'
+      }
+    };
+
+    // --- 2. DOWNTOWN CHICAGO DEMO DATA (Same-Building WOs at Willis Tower color-coordinated with Downtown & Hillside) ---
+    const defaultPoints = [
+      { ...NORTH_LAWNDALE_HOME },
+      {
+        id: 'pt-wacker-44', category: 'business',
+        address: '233 S Wacker Dr', address2: '44th Floor - Suite 4400', city: 'Chicago', state: 'IL', zip: '60606',
+        lat: 41.8789, lng: -87.6359,
+        woNumber: 'WA11204519', fedexPkg: '8412', fedexHub: 'downtown',
+        ticket: '470192834', sched: '11/17 9:30 AM',
+        name: 'Jordan Mercer', phone: '312-555-0192', phone2: '312-555-0193',
+        email: 'jmercer@apexfin.com', altName: 'Lobby Security', altPhone: '312-555-0100',
+        notes: 'Willis Tower 44th Floor: Replace RAID controller (FedEx Pkg #8412 at Downtown Canal St). Check in at Franklin St dock.'
+      },
+      {
+        id: 'pt-wacker-71', category: 'business',
+        address: '233 South Wacker Drive', address2: '71st Floor - IDF Closet B', city: 'Chicago', state: 'IL', zip: '60606',
+        lat: 41.8789, lng: -87.6359,
+        woNumber: 'WA11204682', fedexPkg: '5109', fedexHub: 'hillside',
+        ticket: '470199410', sched: '11/17 11:00 AM',
+        name: 'Priya Nair', phone: '312-555-0248', phone2: '',
+        email: 'pnair@skylinecloud.io', altName: 'NOC On-Call', altPhone: '312-555-0299',
+        notes: 'Same building (Willis Tower, 71st Floor): Swap faulty SFP+ module & fiber trunk (FedEx Pkg #5109 from Hillside).'
+      },
+      {
+        id: 'pt-mart-18', category: 'business',
+        address: '222 W Merchandise Mart Plaza', address2: '18th Floor - Suite 1871', city: 'Chicago', state: 'IL', zip: '60654',
+        lat: 41.8885, lng: -87.6355,
+        woNumber: 'WA11207821', fedexPkg: '3904', fedexHub: 'hillside',
+        ticket: '470210552', sched: '11/17 1:30 PM',
+        name: 'Devon Brooks', phone: '312-555-0315', phone2: '',
+        email: 'dbrooks@marttech.org', altName: 'Reception Desk', altPhone: '312-555-0300',
+        notes: 'ThinkPad X1 Carbon system board (FedEx Pkg #3904 from Hillside Craig Pl).'
+      },
+      {
+        id: 'pt-madison-12', category: 'business',
+        address: '500 W Madison St', address2: '12th Floor - Room 12B', city: 'Chicago', state: 'IL', zip: '60661',
+        lat: 41.8819, lng: -87.6397,
+        woNumber: 'WA11208390', fedexPkg: '7741', fedexHub: 'downtown',
+        ticket: '470218904', sched: '11/17 3:15 PM',
+        name: 'Claire Vance', phone: '312-555-0471', phone2: '',
+        email: 'cvance@westloophealth.com', altName: 'IT Helpdesk', altPhone: '312-555-0400',
+        notes: 'POS terminal touch panel swap (FedEx Pkg #7741 from Downtown Canal St).'
+      }
+    ];
+
+    // Use v7 storage key so updated Same-Building + Hillside/Downtown coordination loads cleanly
+    let points = JSON.parse(localStorage.getItem('wwts_points_v7')) || defaultPoints;
+
+    points.forEach(p => {
+      if (p.category === 'home' && p.address !== '3600 W 16th St') {
+        Object.assign(p, NORTH_LAWNDALE_HOME);
+      }
+      if (typeof p.fedexPkg === 'undefined') p.fedexPkg = '';
+      if (typeof p.fedexHub === 'undefined') p.fedexHub = '';
+    });
+
+    let markers = {};
+    let measureMode = false;
+    let overviewMode = false;
+    let pickLocationMode = false;
+    let selectedForMeasure = [];
+    let activeRouteLayers = [];
+    let routeBadgeObjects = []; // Tracks all active route badges for zoom-aware collision alignment
+    let overviewRouteEntries = [];
+    let currentOverviewFilter = 'all';
+    let lastScreenshotDataUrl = '';
+    let deletedStack = [];
+    let undoTimeoutId = null;
+
+    // --- 3. INITIALIZE MAP ---
+    const map = L.map('map', { zoomControl: false }).setView([41.8720, -87.6750], 12);
+    L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+    const tileLayers = {
+      google_road: L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+        attribution: 'Map data © Google', maxZoom: 20
+      }),
+      esri_street: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles © Esri', maxZoom: 19
+      }),
+      google_hybrid: L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        attribution: 'Imagery © Google', maxZoom: 20
+      })
+    };
+
+    let currentTileLayer = tileLayers.google_road.addTo(map);
+
+    function changeMapStyle(styleKey) {
+      if (currentTileLayer) map.removeLayer(currentTileLayer);
+      currentTileLayer = tileLayers[styleKey] || tileLayers.google_road;
+      currentTileLayer.addTo(map);
+    }
+
+    // Re-align mileage & drive-time boxes automatically whenever the user zooms in or out
+    map.on('zoomend', () => {
+      realignRouteBadgesForZoom();
+    });
+
+    map.on('click', (e) => {
+      document.getElementById('fedexDropdown').classList.add('hidden');
+
+      if (pickLocationMode) {
+        pickLocationMode = false;
+        document.getElementById('wo_lat').value = e.latlng.lat.toFixed(6);
+        document.getElementById('wo_lng').value = e.latlng.lng.toFixed(6);
+        document.getElementById('detailModal').classList.remove('hidden');
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      const container = document.getElementById('fedexMenuContainer');
+      const dropdown = document.getElementById('fedexDropdown');
+      if (container && dropdown && !container.contains(e.target)) {
+        dropdown.classList.add('hidden');
+      }
+    });
+
+    function handleFedexHubCheckbox(selectedHub) {
+      const hillChk = document.getElementById('wo_hub_hillside');
+      const dtwnChk = document.getElementById('wo_hub_downtown');
+      if (selectedHub === 'hillside' && hillChk.checked) {
+        dtwnChk.checked = false;
+      } else if (selectedHub === 'downtown' && dtwnChk.checked) {
+        hillChk.checked = false;
+      }
+    }
+
+    // --- 3A. FEDEX PICKUP POPDOWN MENU HANDLERS ---
+    function toggleFedexDropdown(e) {
+      if (e) e.stopPropagation();
+      const dropdown = document.getElementById('fedexDropdown');
+      dropdown.classList.toggle('hidden');
+      updateFedexMenuUI();
+    }
+
+    function updateFedexMenuUI() {
+      ['hillside', 'downtown'].forEach(key => {
+        const loc = FEDEX_LOCATIONS[key];
+        const exists = points.some(p => p.id === loc.id || (p.address.toLowerCase() === loc.address.toLowerCase() && p.city.toLowerCase() === loc.city.toLowerCase()));
+        const statusEl = document.getElementById(`fedexStatus_${key}`);
+        const removeBtn = document.getElementById(`fedexRemove_${key}`);
+        if (statusEl && removeBtn) {
+          statusEl.classList.toggle('hidden', !exists);
+          removeBtn.classList.toggle('hidden', !exists);
+        }
+      });
+    }
+
+    function addFedexLocation(key) {
+      const loc = FEDEX_LOCATIONS[key];
+      if (!loc) return;
+
+      let existing = points.find(p => p.id === loc.id || (p.address.toLowerCase() === loc.address.toLowerCase() && p.city.toLowerCase() === loc.city.toLowerCase()));
+      if (!existing) {
+        existing = { ...loc };
+        points.push(existing);
+        renderAll();
+        if (overviewMode) renderOverviewFromHome();
+      }
+      updateFedexMenuUI();
+      map.setView([existing.lat, existing.lng], 13);
+    }
+
+    function addBothFedexLocations() {
+      ['hillside', 'downtown'].forEach(key => {
+        const loc = FEDEX_LOCATIONS[key];
+        const exists = points.some(p => p.id === loc.id || (p.address.toLowerCase() === loc.address.toLowerCase() && p.city.toLowerCase() === loc.city.toLowerCase()));
+        if (!exists) {
+          points.push({ ...loc });
+        }
+      });
+      renderAll();
+      updateFedexMenuUI();
+      if (overviewMode) {
+        renderOverviewFromHome();
+      } else {
+        map.fitBounds([
+          [FEDEX_LOCATIONS.hillside.lat, FEDEX_LOCATIONS.hillside.lng],
+          [FEDEX_LOCATIONS.downtown.lat, FEDEX_LOCATIONS.downtown.lng]
+        ], { padding: [80, 80] });
+      }
+    }
+
+    function removeFedexLocation(key, event) {
+      if (event) event.stopPropagation();
+      const loc = FEDEX_LOCATIONS[key];
+      if (!loc) return;
+      const target = points.find(p => p.id === loc.id || (p.address.toLowerCase() === loc.address.toLowerCase() && p.city.toLowerCase() === loc.city.toLowerCase()));
+      if (target) {
+        deletePointById(target.id, event);
+        updateFedexMenuUI();
+      }
+    }
+
+    function enableMapPickMode() {
+      pickLocationMode = true;
+      document.getElementById('detailModal').classList.add('hidden');
+      alert('Click anywhere on the map to set this point\'s exact location.');
+    }
+
+    const colorMap = {
+      business: '#2563eb', // Blue
+      home: '#dc2626',     // Red
+      walmart: '#f97316'   // Orange
+    };
+
+    // --- 3B. SAME ADDRESS / SAME BUILDING DETECTOR ---
+    function normalizeBuildingAddress(pt) {
+      if (!pt || pt.category === 'home') return '';
+      let addr = (pt.address || '').toLowerCase().trim();
+      let city = (pt.city || '').toLowerCase().trim();
+      if (!addr) return '';
+
+      addr = addr.replace(/\b(fl|floor|ste|suite|apt|apartment|unit|rm|room|bldg|building|cage|idf|mdf)\b.*$/i, '').trim();
+      addr = addr.replace(/[.,#/-]/g, ' ');
+
+      const abbrMap = {
+        'north': 'n', 'south': 's', 'east': 'e', 'west': 'w',
+        'street': 'st', 'avenue': 'ave', 'road': 'rd', 'boulevard': 'blvd',
+        'drive': 'dr', 'lane': 'ln', 'highway': 'hwy', 'parkway': 'pkwy',
+        'court': 'ct', 'place': 'pl', 'terrace': 'ter', 'circle': 'cir', 'plaza': 'plz'
+      };
+
+      const normalizedWords = addr.split(/\s+/).filter(Boolean).map(w => abbrMap[w] || w);
+      return `${normalizedWords.join(' ')}|${city}`;
+    }
+
+    function computeSameBuildingGroups() {
+      const groupByKey = {};
+      const metaById = {};
+
+      const workOrders = points.filter(p => p.category !== 'home');
+
+      workOrders.forEach(pt => {
+        let key = normalizeBuildingAddress(pt);
+        let matchedKey = key;
+        for (const other of workOrders) {
+          if (other.id === pt.id) continue;
+          const otherKey = normalizeBuildingAddress(other);
+          const closeCoords = Math.abs(pt.lat - other.lat) < 0.0003 && Math.abs(pt.lng - other.lng) < 0.0003;
+          if ((key && key === otherKey) || closeCoords) {
+            matchedKey = otherKey || key || `coords_${other.lat.toFixed(4)}_${other.lng.toFixed(4)}`;
+            break;
+          }
+        }
+        if (!groupByKey[matchedKey]) groupByKey[matchedKey] = [];
+        groupByKey[matchedKey].push(pt);
+      });
+
+      Object.values(groupByKey).forEach(group => {
+        const isMulti = group.length >= 2;
+        // If one WO in a building has a Hillside/Downtown hub and a sibling was left blank, allow inheriting the building's hub for color coordination
+        const sharedHub = group.find(g => g.fedexHub)?.fedexHub || '';
+        group.forEach((pt, idx) => {
+          metaById[pt.id] = {
+            isSameBuilding: isMulti,
+            count: group.length,
+            indexInBuilding: idx,
+            siblings: group,
+            effectiveHub: pt.fedexHub || (isMulti ? sharedHub : '')
+          };
+        });
+      });
+
+      return metaById;
+    }
+
+    // Helper: Always extract the LAST 4 NUMBERS of the Work Order # for the Map Pin
+    function getPinDisplayCode(pt) {
+      if (pt.category === 'home') return '🏠 HOME';
+      if (pt.id === 'pt-fedex-hillside' || (pt.woNumber || '').toUpperCase() === 'FDX-HILL') return '📦 HILL';
+      if (pt.id === 'pt-fedex-downtown' || (pt.woNumber || '').toUpperCase() === 'FDX-DTWN') return '📦 DTWN';
+      const raw = (pt.woNumber || '').trim();
+      const digitsOnly = raw.replace(/\D/g, '');
+      if (digitsOnly.length >= 4) {
+        return digitsOnly.slice(-4);
+      }
+      if (raw.length >= 4) {
+        return raw.slice(-4).toUpperCase();
+      }
+      return raw || 'WO';
+    }
+
+    // Helper: Get Route Line & Badge Visual Theme — Coordinates Same Building with Hillside (Green) or Downtown (Yellow)
+    function getPointRouteTheme(pt, bMeta) {
+      const isSameBldg = Boolean(bMeta && bMeta.isSameBuilding);
+      const effectiveHub = (bMeta && bMeta.effectiveHub) || pt.fedexHub || '';
+
+      if (pt.category === 'walmart') {
+        return {
+          isSameBuilding: false,
+          hubType: 'pickup',
+          lineColor: '#f97316',
+          casingColor: '#0f172a',
+          badgeBg: '#ffedd5',
+          badgeBorder: '#ea580c',
+          pillBg: '#f97316',
+          pillText: '#ffffff',
+          label: '🟠 FedEx Pickup'
+        };
+      }
+
+      // Same Building + Hillside (Purple Glow + Emerald Green Coordination)
+      if (isSameBldg && effectiveHub === 'hillside') {
+        return {
+          isSameBuilding: true,
+          hubType: 'hillside',
+          lineColor: '#10b981',     // Bright Hillside Green inner line
+          casingColor: '#9333ea',   // Purple Same-Building outer glow casing
+          badgeBg: 'linear-gradient(135deg, #f3e8ff 0%, #a7f3d0 100%)',
+          badgeBorder: '#7e22ce',
+          pillBg: 'linear-gradient(135deg, #9333ea 0%, #10b981 100%)',
+          pillText: '#ffffff',
+          label: '🟣🟢 Same Building • Hillside'
+        };
+      }
+
+      // Same Building + Downtown (Purple Glow + Light Yellow Coordination)
+      if (isSameBldg && effectiveHub === 'downtown') {
+        return {
+          isSameBuilding: true,
+          hubType: 'downtown',
+          lineColor: '#fde047',     // Bright Downtown Yellow inner line
+          casingColor: '#9333ea',   // Purple Same-Building outer glow casing
+          badgeBg: 'linear-gradient(135deg, #f3e8ff 0%, #fef08a 100%)',
+          badgeBorder: '#7e22ce',
+          pillBg: 'linear-gradient(135deg, #9333ea 0%, #fde047 100%)',
+          pillText: '#0f172a',
+          label: '🟣🟡 Same Building • Downtown'
+        };
+      }
+
+      // Same Building (No FedEx Hub specified)
+      if (isSameBldg) {
+        return {
+          isSameBuilding: true,
+          hubType: 'none',
+          lineColor: '#a855f7',
+          casingColor: '#3b0764',
+          badgeBg: '#f3e8ff',
+          badgeBorder: '#7e22ce',
+          pillBg: '#a855f7',
+          pillText: '#ffffff',
+          label: '🟣 Same Building'
+        };
+      }
+
+      // Single Building + Hillside
+      if (effectiveHub === 'hillside') {
+        return {
+          isSameBuilding: false,
+          hubType: 'hillside',
+          lineColor: '#10b981',
+          casingColor: '#0f172a',
+          badgeBg: '#a7f3d0',
+          badgeBorder: '#047857',
+          pillBg: '#10b981',
+          pillText: '#0f172a',
+          label: '🟢 Hillside FedEx'
+        };
+      }
+
+      // Single Building + Downtown
+      if (effectiveHub === 'downtown') {
+        return {
+          isSameBuilding: false,
+          hubType: 'downtown',
+          lineColor: '#fde047',
+          casingColor: '#0f172a',
+          badgeBg: '#fef08a',
+          badgeBorder: '#ca8a04',
+          pillBg: '#fde047',
+          pillText: '#0f172a',
+          label: '🟡 Downtown FedEx'
+        };
+      }
+
+      return {
+        isSameBuilding: false,
+        hubType: 'none',
+        lineColor: '#3b82f6',
+        casingColor: '#0f172a',
+        badgeBg: '#facc15',
+        badgeBorder: '#1d4ed8',
+        pillBg: '#3b82f6',
+        pillText: '#ffffff',
+        label: '🔵 Work Order'
+      };
+    }
+
+    function createPinIcon(pt, displayCode, buildingMeta) {
+      const category = pt.category || 'business';
+      const isSameBuilding = buildingMeta && buildingMeta.isSameBuilding && category !== 'home';
+      const effectiveHub = (buildingMeta && buildingMeta.effectiveHub) || pt.fedexHub || '';
+      const bg = colorMap[category] || colorMap.business;
+
+      // Fan out pins horizontally if multiple work orders share the same building
+      let translateX = '-50%';
+      if (isSameBuilding && buildingMeta.count > 1) {
+        const offsetPx = (buildingMeta.indexInBuilding - (buildingMeta.count - 1) / 2) * 70;
+        translateX = `calc(-50% + ${offsetPx}px)`;
+      }
+
+      const pillClasses = ['wo-pin-pill'];
+      const arrowClasses = ['wo-pin-arrow'];
+
+      if (category === 'business') {
+        if (isSameBuilding && effectiveHub === 'hillside') {
+          pillClasses.push('same-building-glow', 'pin-samebldg-hillside');
+          arrowClasses.push('arrow-hillside', 'same-building-arrow');
+        } else if (isSameBuilding && effectiveHub === 'downtown') {
+          pillClasses.push('same-building-glow', 'pin-samebldg-downtown');
+          arrowClasses.push('arrow-downtown', 'same-building-arrow');
+        } else if (isSameBuilding) {
+          pillClasses.push('same-building-glow');
+          arrowClasses.push('same-building-arrow');
+        } else if (effectiveHub === 'hillside') {
+          pillClasses.push('pin-hillside-gradient');
+          arrowClasses.push('arrow-hillside');
+        } else if (effectiveHub === 'downtown') {
+          pillClasses.push('pin-downtown-gradient');
+          arrowClasses.push('arrow-downtown');
+        }
+      }
+
+      const pkgTag = pt.fedexPkg ? `<span style="font-size:10px;background:rgba(15,23,42,0.8);color:#fde047;padding:1px 4px;border-radius:6px;margin-left:2px;">📦${pt.fedexPkg}</span>` : '';
+
+      return L.divIcon({
+        className: 'custom-wo-icon',
+        html: `
+          <div class="wo-pin-wrapper" style="transform: translate(${translateX}, -100%);">
+            <div class="${pillClasses.join(' ')}" style="background:${bg}">
+              ${isSameBuilding ? '🏢 ' : ''}${displayCode}${pkgTag}
+            </div>
+            <div class="${arrowClasses.join(' ')}" style="border-top-color:${bg}"></div>
+          </div>
+        `,
+        iconSize: null
+      });
+    }
+
+    // --- 4. RENDER PINS & "ALL POINTS" DRAWER ---
+    function renderAll() {
+      localStorage.setItem('wwts_points_v7', JSON.stringify(points));
+      document.getElementById('pointCount').innerText = points.length;
+      updateFedexMenuUI();
+
+      Object.values(markers).forEach(m => map.removeLayer(m));
+      markers = {};
+
+      const buildingMetaMap = computeSameBuildingGroups();
+      const listEl = document.getElementById('pointsList');
+      listEl.innerHTML = '';
+
+      points.forEach((pt) => {
+        const pinCode = getPinDisplayCode(pt);
+        const bMeta = buildingMetaMap[pt.id] || { isSameBuilding: false, count: 1, indexInBuilding: 0, effectiveHub: pt.fedexHub || '' };
+        const effectiveHub = bMeta.effectiveHub || pt.fedexHub || '';
+
+        const marker = L.marker([pt.lat, pt.lng], {
+          icon: createPinIcon(pt, pinCode, bMeta),
+          draggable: true
+        }).addTo(map);
+
+        const sameBldgTooltip = bMeta.isSameBuilding
+          ? `<br/><span style="color:#a855f7;font-weight:800;">🏢 Same Building (${bMeta.count} WOs${effectiveHub ? ' • ' + effectiveHub.toUpperCase() : ''})</span>`
+          : '';
+        const fedexTooltip = (effectiveHub || pt.fedexPkg)
+          ? `<br/><span style="color:#059669;font-weight:800;">📦 FedEx: ${effectiveHub ? effectiveHub.toUpperCase() : 'Pkg'} ${pt.fedexPkg ? '#' + pt.fedexPkg : ''}</span>`
+          : '';
+
+        marker.bindTooltip(
+          `<b>${pt.woNumber || pinCode}</b> — ${pt.city}<br/>${pt.address} ${pt.address2 ? '<b>(' + pt.address2 + ')</b>' : ''}${fedexTooltip}${sameBldgTooltip}`,
+          { direction: 'top', offset: [0, -36] }
+        );
+
+        marker.on('click', () => {
+          if (measureMode) {
+            handleMeasureClick(pt);
+          } else {
+            openDetailModal(pt.id);
+          }
+        });
+
+        marker.on('dragend', (e) => {
+          const pos = e.target.getLatLng();
+          pt.lat = pos.lat;
+          pt.lng = pos.lng;
+          localStorage.setItem('wwts_points_v7', JSON.stringify(points));
+          renderAll();
+          if (overviewMode) renderOverviewFromHome();
+        });
+
+        markers[pt.id] = marker;
+
+        // Sidebar Badge Styling (Coordinated for Same Building + Hillside / Downtown)
+        let badgeStyle = '';
+        let badgeColor = 'bg-blue-600 text-white';
+        if (pt.category === 'home') {
+          badgeColor = 'bg-red-600 text-white';
+        } else if (pt.category === 'walmart') {
+          badgeColor = 'bg-orange-500 text-white';
+        } else if (bMeta.isSameBuilding && effectiveHub === 'hillside') {
+          badgeStyle = 'background: linear-gradient(135deg, #9333ea 0%, #10b981 100%); color: #fff; box-shadow: 0 0 10px rgba(168,85,247,0.8); border: 1px solid #a7f3d0;';
+        } else if (bMeta.isSameBuilding && effectiveHub === 'downtown') {
+          badgeStyle = 'background: linear-gradient(135deg, #9333ea 0%, #fde047 100%); color: #fff; text-shadow: 0 1px 2px #000; box-shadow: 0 0 10px rgba(168,85,247,0.8); border: 1px solid #fef08a;';
+        } else if (bMeta.isSameBuilding) {
+          badgeColor = 'same-building-badge-glow text-white';
+        } else if (effectiveHub === 'hillside') {
+          badgeStyle = 'background: linear-gradient(135deg, #1d4ed8, #10b981); color: #fff;';
+        } else if (effectiveHub === 'downtown') {
+          badgeStyle = 'background: linear-gradient(135deg, #1d4ed8, #fde047); color: #fff; text-shadow: 0 1px 2px #000;';
+        }
+
+        const cardGlowClass = bMeta.isSameBuilding
+          ? 'same-building-card-glow border-purple-500'
+          : 'bg-slate-800 border-slate-700';
+
+        const item = document.createElement('div');
+        item.className = `p-3 rounded-xl hover:bg-slate-700 cursor-pointer border transition flex items-start gap-3 ${cardGlowClass}`;
+        item.onclick = () => {
+          map.setView([pt.lat, pt.lng], 14);
+          openDetailModal(pt.id);
+        };
+        item.innerHTML = `
+          <div class="flex flex-col items-center gap-2 shrink-0">
+            <span class="px-2 py-1 rounded-md ${badgeColor} font-extrabold text-xs" style="${badgeStyle}">${pinCode}</span>
+            <button
+              type="button"
+              onclick="deletePointById('${pt.id}', event)"
+              title="Delete Work Order (Ctrl+Z to Undo)"
+              class="w-8 h-7 rounded-lg bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/40 flex items-center justify-center text-xs transition"
+            >
+              🗑️
+            </button>
+          </div>
+          <div class="overflow-hidden flex-1">
+            <div class="font-bold text-sm truncate">${pt.woNumber || 'Work Order'} — ${pt.city}</div>
+            ${(effectiveHub || pt.fedexPkg) ? `
+              <div class="text-[11px] font-extrabold ${effectiveHub === 'hillside' ? 'text-emerald-300' : effectiveHub === 'downtown' ? 'text-yellow-300' : 'text-orange-300'}">
+                📦 ${effectiveHub ? effectiveHub.toUpperCase() + ' FedEx' : 'FedEx'} ${pt.fedexPkg ? '• Pkg #' + pt.fedexPkg : ''}
+              </div>
+            ` : ''}
+            ${bMeta.isSameBuilding ? `<div class="text-[11px] text-purple-300 font-extrabold">🏢 Same Building (${bMeta.count} WOs) ${pt.address2 ? '• ' + pt.address2 : ''}</div>` : ''}
+            <div class="text-xs text-slate-300 truncate">${pt.address}${pt.address2 ? ', ' + pt.address2 : ''}</div>
+            ${pt.sched ? `<div class="text-[11px] text-blue-300 font-semibold">🕒 ${pt.sched}</div>` : ''}
+            ${pt.name ? `<div class="text-xs text-slate-400 truncate">👤 ${pt.name} ${pt.phone ? '• ' + pt.phone : ''}</div>` : ''}
+          </div>
+        `;
+        listEl.appendChild(item);
+      });
+    }
+
+    // --- 5. DELETE + UNDO POPUP TOAST + CTRL+Z SHORTCUT ---
+    function deletePointById(pointId, event) {
+      if (event) event.stopPropagation();
+      const idx = points.findIndex(p => p.id === pointId);
+      if (idx === -1) return;
+
+      const removedPoint = points[idx];
+      deletedStack.push({ point: removedPoint, index: idx });
+      points.splice(idx, 1);
+
+      closeDetailModal();
+      renderAll();
+      if (overviewMode) renderOverviewFromHome();
+
+      showUndoToast(`Deleted ${removedPoint.woNumber || removedPoint.city} successfully! Undo?`);
+    }
+
+    function deleteCurrentPoint() {
+      const id = document.getElementById('wo_id').value;
+      if (id) deletePointById(id, null);
+    }
+
+    function showUndoToast(message) {
+      const toast = document.getElementById('undoToast');
+      document.getElementById('undoToastText').innerText = `🗑️ ${message}`;
+      toast.classList.remove('hidden');
+
+      if (undoTimeoutId) clearTimeout(undoTimeoutId);
+      undoTimeoutId = setTimeout(() => {
+        hideUndoToast();
+      }, 6000);
+    }
+
+    function hideUndoToast() {
+      document.getElementById('undoToast').classList.add('hidden');
+      if (undoTimeoutId) {
+        clearTimeout(undoTimeoutId);
+        undoTimeoutId = null;
+      }
+    }
+
+    function undoLastDelete() {
+      if (deletedStack.length === 0) return;
+      const last = deletedStack.pop();
+      const insertIdx = Math.min(last.index, points.length);
+      points.splice(insertIdx, 0, last.point);
+
+      hideUndoToast();
+      renderAll();
+      map.setView([last.point.lat, last.point.lng], 13);
+      if (overviewMode) renderOverviewFromHome();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const tag = (document.activeElement?.tagName || '').toLowerCase();
+      const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select';
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !isTyping) {
+        if (deletedStack.length > 0) {
+          e.preventDefault();
+          undoLastDelete();
+        }
+      }
+    });
+
+    // --- 6. ONE-CLICK COPY CONTACT EMAIL BUTTON ---
+    async function copyContactEmail() {
+      const emailInput = document.getElementById('wo_email');
+      const btn = document.getElementById('copyEmailBtn');
+      const email = (emailInput.value || '').trim();
+
+      if (!email) {
+        btn.innerText = '⚠️ Empty';
+        setTimeout(() => { btn.innerText = '📋 Copy'; }, 1500);
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(email);
+      } catch (err) {
+        emailInput.select();
+        document.execCommand('copy');
+      }
+
+      btn.innerText = '✅ Copied!';
+      btn.classList.replace('bg-blue-600', 'bg-emerald-600');
+      setTimeout(() => {
+        btn.innerText = '📋 Copy';
+        btn.classList.replace('bg-emerald-600', 'bg-blue-600');
+      }, 1800);
+    }
+
+    // --- 7. COLOR-CODED ROUTE DRAWING + ZOOM-AWARE AUTO-ALIGNING MILEAGE/TIME BOXES ---
+    function clearRouteLines() {
+      activeRouteLayers.forEach(layer => map.removeLayer(layer));
+      activeRouteLayers = [];
+      routeBadgeObjects = [];
+      overviewRouteEntries = [];
+      overviewMode = false;
+      document.getElementById('overviewPanel').classList.add('hidden');
+      if (!measureMode) {
+        document.getElementById('distanceBanner').classList.add('hidden');
+      }
+    }
+
+    function formatDriveTime(totalMinutes) {
+      const mins = Math.max(1, Math.round(totalMinutes));
+      if (mins < 60) {
+        return `${mins} min${mins === 1 ? '' : 's'}`;
+      }
+      const hrs = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return remMins > 0 ? `${hrs} hr ${remMins} min` : `${hrs} hr`;
+    }
+
+    function calcRoadMilesFallback(lat1, lon1, lat2, lon2) {
+      const R = 3958.8;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) ** 2;
+      const straightMiles = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return (straightMiles * 1.25).toFixed(1);
+    }
+
+    async function getRouteBetween(p1, p2, positionRatio = 0.5) {
+      try {
+        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${p1.lng},${p1.lat};${p2.lng},${p2.lat}?overview=full&geometries=geojson`);
+        const data = await res.json();
+        if (data.routes && data.routes.length > 0) {
+          const milesNum = data.routes[0].distance * 0.000621371;
+          const miles = milesNum.toFixed(1);
+          const rawMinutes = (data.routes[0].duration / 60) * 1.2;
+          const durationMinutes = milesNum < 0.05 ? 1 : Math.max(2, Math.round(rawMinutes));
+          const durationText = formatDriveTime(durationMinutes);
+
+          const coords = data.routes[0].geometry.coordinates;
+          const targetIdx = Math.min(coords.length - 1, Math.max(0, Math.floor(coords.length * positionRatio)));
+          const midLatLng = [coords[targetIdx][1], coords[targetIdx][0]];
+          return { miles, durationMinutes, durationText, geometry: data.routes[0].geometry, midLatLng };
+        }
+      } catch (e) {}
+
+      const miles = calcRoadMilesFallback(p1.lat, p1.lng, p2.lat, p2.lng);
+      const milesNum = parseFloat(miles);
+      const durationMinutes = milesNum < 0.05 ? 1 : Math.max(2, Math.round((milesNum / 24) * 60));
+      const durationText = formatDriveTime(durationMinutes);
+      const midLatLng = [
+        p1.lat + (p2.lat - p1.lat) * positionRatio,
+        p1.lng + (p2.lng - p1.lng) * positionRatio
+      ];
+      return { miles, durationMinutes, durationText, geometry: null, midLatLng };
+    }
+
+    function drawColorCodedLineWithBadge(p1, p2, routeInfo, theme, badgeHeaderLabel = '', rankIndex = 0) {
+      let casingLayer;
+      let lineLayer;
+
+      // Outer casing (Purple if Same Building, Dark Navy otherwise) + Inner Hub Color (Green for Hillside, Yellow for Downtown)
+      const casingWeight = theme.isSameBuilding ? 10.5 : 9;
+      if (routeInfo.geometry) {
+        casingLayer = L.geoJSON(routeInfo.geometry, {
+          style: { color: theme.casingColor || '#0f172a', weight: casingWeight, opacity: 0.85 }
+        }).addTo(map);
+        lineLayer = L.geoJSON(routeInfo.geometry, {
+          style: { color: theme.lineColor, weight: 5.5, opacity: 0.96 }
+        }).addTo(map);
+      } else {
+        casingLayer = L.polyline([[p1.lat, p1.lng], [p2.lat, p2.lng]], {
+          color: theme.casingColor || '#0f172a', weight: casingWeight - 1, opacity: 0.85
+        }).addTo(map);
+        lineLayer = L.polyline([[p1.lat, p1.lng], [p2.lat, p2.lng]], {
+          color: theme.lineColor, weight: 5, dashArray: '8, 8', opacity: 0.96
+        }).addTo(map);
+      }
+      activeRouteLayers.push(casingLayer, lineLayer);
+
+      const headerTagHtml = badgeHeaderLabel
+        ? `<span style="background:${theme.pillBg || theme.lineColor};color:${theme.pillText || '#0f172a'};padding:0 5px;border-radius:6px;margin-right:3px;font-weight:900;">${badgeHeaderLabel}</span>`
+        : '';
+
+      const badgeIcon = L.divIcon({
+        className: 'custom-mileage-icon',
+        html: `
+          <div class="line-mileage-wrapper" id="routeBadge_${p2.id}">
+            <div class="line-mileage-badge" style="background:${theme.badgeBg};border-color:${theme.badgeBorder};">
+              <div class="line-time-top">${headerTagHtml}⏱️ ~${routeInfo.durationText}</div>
+              <div class="line-miles-bottom">🚗 ${routeInfo.miles} mi</div>
+            </div>
+          </div>
+        `,
+        iconSize: null
+      });
+
+      const badgeMarker = L.marker(routeInfo.midLatLng, { icon: badgeIcon }).addTo(map);
+      // Leader tether line that connects the shifted badge box back to its exact route midpoint when zoomed out
+      const tetherLayer = L.polyline([routeInfo.midLatLng, routeInfo.midLatLng], {
+        color: theme.lineColor,
+        weight: 2.5,
+        dashArray: '4, 4',
+        opacity: 0
+      }).addTo(map);
+
+      activeRouteLayers.push(tetherLayer, badgeMarker);
+
+      const badgeObj = {
+        ptId: p2.id,
+        rankIndex,
+        anchorLatLng: L.latLng(routeInfo.midLatLng[0], routeInfo.midLatLng[1]),
+        destLatLng: L.latLng(p2.lat, p2.lng),
+        badgeMarker,
+        tetherLayer,
+        theme,
+        hidden: false
+      };
+      routeBadgeObjects.push(badgeObj);
+
+      return { casingLayer, lineLayer, badgeMarker, tetherLayer, badgeObj };
+    }
+
+    // --- 7B. ZOOM-AWARE SCREEN-SPACE COLLISION AVOIDANCE FOR MILEAGE & DRIVE TIME BOXES ---
+    function realignRouteBadgesForZoom() {
+      const visibleBadges = routeBadgeObjects.filter(b => !b.hidden && map.hasLayer(b.badgeMarker));
+      if (visibleBadges.length === 0) return;
+
+      const zoom = map.getZoom();
+      // Gently scale badge size when very zoomed out so boxes stay crisp and compact
+      const scale = zoom <= 9 ? 0.82 : zoom === 10 ? 0.88 : zoom === 11 ? 0.94 : 1;
+      document.documentElement.style.setProperty('--badge-zoom-scale', scale);
+
+      const boxW = 148 * scale;
+      const boxH = 54 * scale;
+
+      // Convert each badge's route midpoint anchor to current screen pixel coordinates
+      const nodes = visibleBadges.map((b, i) => {
+        const anchorPt = map.latLngToContainerPoint(b.anchorLatLng);
+        const destPt = map.latLngToContainerPoint(b.destLatLng);
+        // Give identical anchors a slight initial radial fan based on their index so they separate cleanly
+        const angle = (i * (2 * Math.PI / Math.max(2, visibleBadges.length))) - Math.PI / 2;
+        const initOffset = visibleBadges.length > 1 ? 6 : 0;
+        return {
+          badge: b,
+          anchorX: anchorPt.x,
+          anchorY: anchorPt.y,
+          destX: destPt.x,
+          destY: destPt.y,
+          x: anchorPt.x + Math.cos(angle) * initOffset,
+          y: anchorPt.y + Math.sin(angle) * initOffset
+        };
+      });
+
+      // Iterative 2D bounding-box collision resolution in screen space
+      const iterations = 45;
+      for (let iter = 0; iter < iterations; iter++) {
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const a = nodes[i];
+            const b = nodes[j];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const overlapX = boxW - Math.abs(dx);
+            const overlapY = boxH - Math.abs(dy);
+
+            if (overlapX > 0 && overlapY > 0) {
+              // Push apart along the axis with the smaller overlap (prefers neat vertical stacking)
+              if (overlapY <= overlapX * 1.15) {
+                const dirY = dy === 0 ? (i < j ? -1 : 1) : Math.sign(dy);
+                const pushY = (overlapY / 2) + 2;
+                a.y -= dirY * pushY;
+                b.y += dirY * pushY;
+              } else {
+                const dirX = dx === 0 ? (i < j ? -1 : 1) : Math.sign(dx);
+                const pushX = (overlapX / 2) + 2;
+                a.x -= dirX * pushX;
+                b.x += dirX * pushX;
+              }
+            }
+          }
+        }
+
+        // Gentle spring pull toward the original route anchor so boxes stay as close to their route line as possible
+        nodes.forEach(n => {
+          n.x += (n.anchorX - n.x) * 0.08;
+          n.y += (n.anchorY - n.y) * 0.08;
+        });
+      }
+
+      // Apply the aligned screen coordinates back to the Leaflet markers and tether lines
+      nodes.forEach(n => {
+        const newLatLng = map.containerPointToLatLng([n.x, n.y]);
+        n.badge.badgeMarker.setLatLng(newLatLng);
+
+        const distMovedPx = Math.hypot(n.x - n.anchorX, n.y - n.anchorY);
+        if (distMovedPx > 14) {
+          n.badge.tetherLayer.setLatLngs([n.badge.anchorLatLng, newLatLng]);
+          n.badge.tetherLayer.setStyle({ opacity: 0.85 });
+        } else {
+          n.badge.tetherLayer.setStyle({ opacity: 0 });
+        }
+      });
+    }
+
+    // --- 8. TWO-POINT DISTANCE CALCULATOR ---
+    function toggleMeasureMode() {
+      measureMode = !measureMode;
+      selectedForMeasure = [];
+      clearRouteLines();
+
+      const status = document.getElementById('measureStatus');
+      const banner = document.getElementById('distanceBanner');
+      document.getElementById('routeLinks').classList.add('hidden');
+
+      if (measureMode) {
+        status.innerText = 'ON';
+        status.className = 'text-xs px-2 py-0.5 rounded bg-blue-600 text-white font-bold';
+        banner.classList.remove('hidden');
+        document.getElementById('distanceText').innerText = 'Click Point 1 on the map...';
+        document.getElementById('reimbursementText').innerText = '';
+      } else {
+        status.innerText = 'OFF';
+        status.className = 'text-xs px-2 py-0.5 rounded bg-slate-200 font-bold';
+        banner.classList.add('hidden');
+      }
+    }
+
+    async function handleMeasureClick(pt) {
+      selectedForMeasure.push(pt);
+      const code1 = getPinDisplayCode(selectedForMeasure[0]);
+
+      if (selectedForMeasure.length === 1) {
+        clearRouteLines();
+        document.getElementById('distanceBanner').classList.remove('hidden');
+        document.getElementById('distanceText').innerHTML = `From <b>[${code1} - ${pt.city}]</b> → Click 2nd point...`;
+        document.getElementById('reimbursementText').innerText = '';
+        document.getElementById('routeLinks').classList.add('hidden');
+      } else if (selectedForMeasure.length === 2) {
+        const [p1, p2] = selectedForMeasure;
+        const c1 = getPinDisplayCode(p1);
+        const c2 = getPinDisplayCode(p2);
+        document.getElementById('distanceText').innerText = `Calculating drive time & road miles between ${c1} and ${c2}...`;
+
+        const buildingMetaMap = computeSameBuildingGroups();
+        const theme = getPointRouteTheme(p2, buildingMetaMap[p2.id]);
+        const routeInfo = await getRouteBetween(p1, p2, 0.5);
+        const { lineLayer } = drawColorCodedLineWithBadge(p1, p2, routeInfo, theme, `${c1}→${c2}`, 0);
+        map.fitBounds(lineLayer.getBounds(), { padding: [70, 70] });
+        setTimeout(realignRouteBadgesForZoom, 60);
+
+        const payout = (parseFloat(routeInfo.miles) * 0.40).toFixed(2);
+        document.getElementById('distanceText').innerHTML = `
+          <div class="text-xs text-blue-300 font-extrabold mb-0.5">⏱️ Est. Drive Time: ~${routeInfo.durationText} (${theme.label})</div>
+          🚗 <b>${c1} (${p1.city})</b> → <b>${c2} (${p2.city})</b>: <span class="text-yellow-300 font-extrabold text-base">${routeInfo.miles} miles</span>
+        `;
+        document.getElementById('reimbursementText').innerText = `WWTS Payout ($0.40/mi): $${payout} ${parseFloat(routeInfo.miles) > 45 ? '• Qualifies for >45 mi Home Rule!' : ''}`;
+
+        const gmapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(p1.address + ', ' + p1.city + ', ' + p1.state)}&destination=${encodeURIComponent(p2.address + ', ' + p2.city + ', ' + p2.state)}`;
+        document.getElementById('gmapsRouteLink').href = gmapsUrl;
+        document.getElementById('routeLinks').classList.remove('hidden');
+
+        selectedForMeasure = [];
+      }
+    }
+
+    // --- 9. OVERVIEW OF ALL POINTS TO HOME BASE (COLOR-CODED BY HILLSIDE / DOWNTOWN / SAME BUILDING + AUTO-ALIGN) ---
+    function getOrCreateHomeBase() {
+      let homePt = points.find(p => p.category === 'home');
+      if (!homePt) {
+        homePt = { ...NORTH_LAWNDALE_HOME };
+        points.unshift(homePt);
+        renderAll();
+      }
+      return homePt;
+    }
+
+    function openHomeBaseModal() {
+      const homePt = getOrCreateHomeBase();
+      map.setView([homePt.lat, homePt.lng], 13);
+      openDetailModal(homePt.id);
+    }
+
+    async function toggleOverviewFromHome() {
+      if (overviewMode) {
+        clearRouteLines();
+        return;
+      }
+      if (measureMode) toggleMeasureMode();
+      await renderOverviewFromHome();
+    }
+
+    function spotlightOverviewRoute(targetPtId) {
+      overviewRouteEntries.forEach(entry => {
+        if (entry.hiddenByFilter) return;
+        const isTarget = !targetPtId || entry.ptId === targetPtId;
+        const lineOpacity = isTarget ? 0.98 : 0.14;
+        const casingOpacity = isTarget ? 0.88 : 0.08;
+
+        if (entry.lineLayer.setStyle) entry.lineLayer.setStyle({ opacity: lineOpacity, weight: isTarget && targetPtId ? 7 : 5.5 });
+        if (entry.casingLayer.setStyle) entry.casingLayer.setStyle({ opacity: casingOpacity, weight: isTarget && targetPtId ? 12 : (entry.isSameBuilding ? 10.5 : 9) });
+        if (isTarget && targetPtId && entry.lineLayer.bringToFront) {
+          entry.casingLayer.bringToFront();
+          entry.lineLayer.bringToFront();
+        }
+
+        const badgeEl = document.getElementById(`routeBadge_${entry.ptId}`);
+        if (badgeEl) {
+          badgeEl.classList.toggle('dimmed-badge', !isTarget);
+          badgeEl.classList.toggle('focused-badge', Boolean(targetPtId && isTarget));
+        }
+      });
+    }
+
+    function filterOverviewRoutes(filterKey) {
+      currentOverviewFilter = filterKey;
+      ['all', 'hillside', 'downtown', 'pickup', 'samebuilding'].forEach(k => {
+        const btn = document.getElementById(`ovFilter_${k}`);
+        if (btn) {
+          btn.classList.toggle('ring-2', k === filterKey);
+          btn.classList.toggle('ring-white', k === filterKey);
+        }
+      });
+
+      overviewRouteEntries.forEach(entry => {
+        let show = false;
+        if (filterKey === 'all') show = true;
+        else if (filterKey === 'samebuilding') show = entry.isSameBuilding;
+        else if (filterKey === 'hillside') show = entry.hubType === 'hillside';
+        else if (filterKey === 'downtown') show = entry.hubType === 'downtown';
+        else if (filterKey === 'pickup') show = entry.hubType === 'pickup';
+
+        entry.hiddenByFilter = !show;
+        entry.badgeObj.hidden = !show;
+
+        if (show) {
+          if (!map.hasLayer(entry.casingLayer)) map.addLayer(entry.casingLayer);
+          if (!map.hasLayer(entry.lineLayer)) map.addLayer(entry.lineLayer);
+          if (!map.hasLayer(entry.tetherLayer)) map.addLayer(entry.tetherLayer);
+          if (!map.hasLayer(entry.badgeMarker)) map.addLayer(entry.badgeMarker);
+        } else {
+          if (map.hasLayer(entry.casingLayer)) map.removeLayer(entry.casingLayer);
+          if (map.hasLayer(entry.lineLayer)) map.removeLayer(entry.lineLayer);
+          if (map.hasLayer(entry.tetherLayer)) map.removeLayer(entry.tetherLayer);
+          if (map.hasLayer(entry.badgeMarker)) map.removeLayer(entry.badgeMarker);
+        }
+        if (entry.rowEl) {
+          entry.rowEl.classList.toggle('hidden', !show);
+        }
+      });
+
+      spotlightOverviewRoute(null);
+      realignRouteBadgesForZoom();
+    }
+
+    async function renderOverviewFromHome() {
+      clearRouteLines();
+      overviewMode = true;
+      currentOverviewFilter = 'all';
+
+      const homePt = getOrCreateHomeBase();
+      const otherPoints = points.filter(p => p.id !== homePt.id);
+      const buildingMetaMap = computeSameBuildingGroups();
+
+      const panel = document.getElementById('overviewPanel');
+      const listEl = document.getElementById('overviewList');
+      document.getElementById('overviewHomeLabel').innerText = `From Home (${homePt.address}) • Hover to spotlight line`;
+      panel.classList.remove('hidden');
+      listEl.innerHTML = `<div class="text-slate-400 py-3 text-center">Calculating color-coded routes from Home Base...</div>`;
+
+      const routeDataList = [];
+      const boundsCoords = [[homePt.lat, homePt.lng]];
+
+      for (let i = 0; i < otherPoints.length; i++) {
+        const pt = otherPoints[i];
+        const staggerRatio = 0.34 + ((i % 5) * 0.11);
+        const routeInfo = await getRouteBetween(homePt, pt, staggerRatio);
+        boundsCoords.push([pt.lat, pt.lng]);
+        routeDataList.push({
+          pt,
+          routeInfo,
+          miles: parseFloat(routeInfo.miles),
+          durationText: routeInfo.durationText
+        });
+      }
+
+      routeDataList.sort((a, b) => a.miles - b.miles);
+
+      listEl.innerHTML = '';
+      overviewRouteEntries = [];
+
+      routeDataList.forEach((item, index) => {
+        const { pt, routeInfo, miles, durationText } = item;
+        const code = getPinDisplayCode(pt);
+        const payout = (miles * 0.40).toFixed(2);
+        const isOver45 = miles > 45;
+        const bMeta = buildingMetaMap[pt.id] || { isSameBuilding: false, effectiveHub: pt.fedexHub || '' };
+        const theme = getPointRouteTheme(pt, bMeta);
+
+        const { casingLayer, lineLayer, badgeMarker, tetherLayer, badgeObj } = drawColorCodedLineWithBadge(
+          homePt,
+          pt,
+          routeInfo,
+          theme,
+          `#${index + 1} ${code}`,
+          index
+        );
+
+        const rowGlow = bMeta.isSameBuilding ? 'same-building-card-glow border-purple-500' : 'bg-slate-800 border-slate-700';
+
+        const row = document.createElement('div');
+        row.className = `p-2.5 rounded-xl hover:bg-slate-700 border cursor-pointer transition flex items-center justify-between gap-2 ${rowGlow}`;
+        row.style.borderLeft = `6px solid ${theme.lineColor}`;
+        row.onmouseenter = () => spotlightOverviewRoute(pt.id);
+        row.onmouseleave = () => spotlightOverviewRoute(null);
+        row.onclick = () => {
+          map.setView([pt.lat, pt.lng], 14);
+          openDetailModal(pt.id);
+        };
+        row.innerHTML = `
+          <div class="overflow-hidden">
+            <div class="font-bold text-white flex items-center gap-1.5">
+              <span class="bg-slate-950 text-[10px] px-1.5 py-0.5 rounded font-extrabold border" style="border-color:${theme.lineColor};color:${theme.lineColor}">#${index + 1}</span>
+              <span class="text-[11px] px-1.5 py-0.5 rounded font-extrabold" style="background:${theme.pillBg};color:${theme.pillText}">${code}</span>
+              <span class="truncate">${pt.city}</span>
+            </div>
+            <div class="text-[10px] font-extrabold mt-0.5" style="color:${theme.lineColor}">
+              ${theme.label} ${pt.fedexPkg ? '• 📦 Pkg #' + pt.fedexPkg : ''}
+            </div>
+            <div class="text-[11px] text-slate-300 truncate">${pt.address}${pt.address2 ? ' (' + pt.address2 + ')' : ''}</div>
+          </div>
+          <div class="text-right shrink-0">
+            <div class="text-[11px] text-blue-300 font-extrabold">⏱️ ~${durationText}</div>
+            <div class="font-extrabold text-sm text-yellow-300">${miles.toFixed(1)} mi</div>
+            <div class="text-[10px] text-emerald-400 font-semibold">$${payout} ${isOver45 ? '• >45mi!' : ''}</div>
+          </div>
+        `;
+        listEl.appendChild(row);
+
+        overviewRouteEntries.push({
+          ptId: pt.id,
+          isSameBuilding: theme.isSameBuilding,
+          hubType: theme.hubType,
+          casingLayer,
+          lineLayer,
+          tetherLayer,
+          badgeMarker,
+          badgeObj,
+          rowEl: row,
+          hiddenByFilter: false
+        });
+      });
+
+      if (boundsCoords.length > 1) {
+        map.fitBounds(boundsCoords, { padding: [70, 70] });
+      }
+      setTimeout(realignRouteBadgesForZoom, 80);
+    }
+
+    // --- 10. WWTS SCREENSHOT OCR PARSER ---
+    window.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let item of items) {
+        if (item.type.indexOf('image') !== -1) {
+          const file = item.getAsFile();
+          openAddModal();
+          handleScreenshotUpload(file);
+          break;
+        }
+      }
+    });
+
+    const dropZone = document.getElementById('dropZone');
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('bg-blue-100'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('bg-blue-100'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('bg-blue-100');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handleScreenshotUpload(e.dataTransfer.files[0]);
+      }
+    });
+
+    function normalizeSingleWAToken(token) {
+      const digits = token
+        .replace(/^W\s*A\s*/i, '')
+        .split(/\s+/)[0]
+        .replace(/[Iil|!]/g, '1')
+        .replace(/[Oo]/g, '0')
+        .replace(/\D/g, '');
+      if (digits.length >= 6) {
+        return 'WA' + digits.slice(0, 8);
+      }
+      return '';
+    }
+
+    function extractTopWAWorkOrderNumber(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const tokenMatch = line.match(/\bW\s*A\s*([0-9Iil|!Oo]{6,10})/i);
+        if (tokenMatch) {
+          const norm = normalizeSingleWAToken(tokenMatch[0]);
+          if (norm) return norm;
+        }
+      }
+      return '';
+    }
+
+    function parseWWTSWorkOrderText(rawText) {
+      const text = rawText.replace(/\r/g, '');
+
+      function extractBetween(labelPattern, stopLabelsPattern) {
+        const regex = new RegExp(labelPattern + '\\s*[:.-]?\\s*([\\s\\S]*?)(?=' + stopLabelsPattern + '|$)', 'i');
+        const m = text.match(regex);
+        if (!m || !m[1]) return '';
+        return m[1].replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+
+      const allLabels = 'Site\\s*code|Customer\\s*address|Additional\\s*address|City|State|Zip\\s*Code|Contact\\s*Name|Contact\\s*Phone|Contact\\s*2nd\\s*Phone|Contact\\s*Email';
+
+      const woNumber = extractTopWAWorkOrderNumber(text);
+      const schedMatch = text.match(/(\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
+      const sched = schedMatch ? schedMatch[1].trim() : '';
+
+      let siteCode = extractBetween('Site\\s*code', allLabels).match(/\d{5,12}/)?.[0] || '';
+      if (!siteCode) {
+        const ticketMatch = text.match(/\b(469\d{5,8}|470\d{5,8})\b/);
+        if (ticketMatch) siteCode = ticketMatch[1];
+      }
+
+      let customerAddress = extractBetween('Customer\\s*address', allLabels);
+      if (!customerAddress) {
+        const topCardAddr = text.match(/\d{1,2}:\d{2}\s*(?:AM|PM)\s+([^\n]+)/i);
+        const streetRegex = text.match(/(\d{1,6}\s+[NSEW]?\s*[A-Za-z0-9.\s]{2,28}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Hwy|Highway|Pkwy|Parkway|Ct|Court|Way|Pl|Place|Plz|Plaza)\b)/i);
+        customerAddress = (topCardAddr ? topCardAddr[1] : (streetRegex ? streetRegex[1] : '')).trim();
+      }
+
+      const address2 = extractBetween('Additional\\s*address', allLabels);
+
+      let city = extractBetween('City', allLabels).replace(/[^A-Za-z\s]/g, '').trim();
+      let state = extractBetween('State', allLabels).replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase() || 'IL';
+      let zip = extractBetween('Zip\\s*Code', allLabels).match(/\b\d{5}\b/)?.[0] || '';
+
+      if (!zip) {
+        const anyZip = text.match(/\b(60\d{3}|61\d{3}|46\d{3})\b/);
+        if (anyZip) zip = anyZip[1];
+      }
+
+      if (!city) {
+        const lower = text.toLowerCase();
+        for (const c of Object.keys(chicagolandCities)) {
+          if (lower.includes(c)) {
+            city = c.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            break;
+          }
+        }
+      }
+
+      const contactName = extractBetween('Contact\\s*Name', allLabels);
+      const rawPhone1 = extractBetween('Contact\\s*Phone', allLabels);
+      const rawPhone2 = extractBetween('Contact\\s*2nd\\s*Phone', allLabels);
+      const rawEmail = extractBetween('Contact\\s*Email(?:\\s*Address)?', allLabels);
+
+      const allPhones = text.match(/(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/g) || [];
+      const phone1 = (rawPhone1.match(/[\d()-.\s]{7,15}/)?.[0] || allPhones[0] || '').trim();
+      const phone2 = (rawPhone2.match(/[\d()-.\s]{7,15}/)?.[0] || allPhones[1] || '').trim();
+
+      const emailMatch = (rawEmail + ' ' + text).match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/);
+      const email = emailMatch ? emailMatch[1] : '';
+
+      const dueStatus = text.match(/(Not\s*Due\s*Today|Due\s*Today|In\s*Progress|Dispatched)/i)?.[1] || '';
+
+      return {
+        woNumber: woNumber || 'WA11209901',
+        ticket: siteCode,
+        sched,
+        address: customerAddress || '233 S Wacker Dr',
+        address2,
+        city: city || 'Chicago',
+        state: state || 'IL',
+        zip,
+        name: contactName,
+        phone: phone1,
+        phone2: phone2,
+        email,
+        notes: [
+          dueStatus ? `Status: ${dueStatus}` : '',
+          siteCode ? `Site Code: ${siteCode}` : '',
+          address2 ? `Loc: ${address2}` : ''
+        ].filter(Boolean).join(' | ')
+      };
+    }
+
+    function preprocessImageForOCR(file) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          lastScreenshotDataUrl = e.target.result;
+          img.onload = () => {
+            const scale = img.width < 900 ? 2 : 1;
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/png'));
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function handleScreenshotUpload(file) {
+      if (!file) return;
+
+      const statusBox = document.getElementById('ocrStatusBox');
+      const statusText = document.getElementById('ocrStatusText');
+      const progressBar = document.getElementById('ocrProgressBar');
+      statusBox.classList.remove('hidden');
+      statusText.innerText = '🔍 Preparing screenshot & reading top WA#...';
+      progressBar.style.width = '15%';
+
+      try {
+        const processedDataUrl = await preprocessImageForOCR(file);
+
+        const worker = await Tesseract.createWorker('eng', 1, {
+          cacheMethod: 'none',
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              const pct = Math.round(m.progress * 100);
+              progressBar.style.width = `${Math.max(15, pct)}%`;
+              statusText.innerText = `🔍 Capturing WA Work Order # & Customer Info... ${pct}%`;
+            }
+          }
+        });
+
+        const { data: { text } } = await worker.recognize(processedDataUrl);
+        await worker.terminate();
+
+        const extracted = parseWWTSWorkOrderText(text);
+        const autoPlot = document.getElementById('autoPlotToggle').checked;
+
+        closeAddModal();
+
+        const existingMatch = points.find(p => p.woNumber === extracted.woNumber);
+        openDetailModal(existingMatch ? existingMatch.id : null);
+
+        document.getElementById('wo_number').value = extracted.woNumber;
+        document.getElementById('wo_ticket').value = extracted.ticket;
+        document.getElementById('wo_sched').value = extracted.sched;
+        document.getElementById('wo_address').value = extracted.address;
+        document.getElementById('wo_address2').value = extracted.address2;
+        document.getElementById('wo_city').value = extracted.city;
+        document.getElementById('wo_state').value = extracted.state;
+        document.getElementById('wo_zip').value = extracted.zip;
+        document.getElementById('wo_name').value = extracted.name;
+        document.getElementById('wo_phone').value = extracted.phone;
+        document.getElementById('wo_phone2').value = extracted.phone2;
+        document.getElementById('wo_email').value = extracted.email;
+        document.getElementById('wo_notes').value = extracted.notes;
+
+        const last4 = getPinDisplayCode({ category: 'business', woNumber: extracted.woNumber });
+        document.getElementById('modalBadge').innerText = last4;
+        document.getElementById('modalTitle').innerText = `${extracted.woNumber} — ${extracted.city}`;
+
+        if (lastScreenshotDataUrl) {
+          document.getElementById('screenshotPreviewImg').src = lastScreenshotDataUrl;
+          document.getElementById('screenshotPreviewBox').classList.remove('hidden');
+        }
+
+        if (autoPlot) {
+          await saveWorkOrder(new Event('submit'));
+        }
+      } catch (err) {
+        console.error(err);
+        statusText.innerText = '⚠️ Opening form with screenshot preview...';
+        setTimeout(() => {
+          closeAddModal();
+          openDetailModal(null);
+          if (lastScreenshotDataUrl) {
+            document.getElementById('screenshotPreviewImg').src = lastScreenshotDataUrl;
+            document.getElementById('screenshotPreviewBox').classList.remove('hidden');
+          }
+        }, 800);
+      }
+    }
+
+    // --- 11. TRIPLE-FALLBACK GEOCODER ---
+    async function geocodeAddress(address, city, state, zip) {
+      const tempKey = normalizeBuildingAddress({ category: 'business', address, city });
+      if (tempKey) {
+        const sameBldgPt = points.find(p => p.category !== 'home' && normalizeBuildingAddress(p) === tempKey && !isNaN(p.lat) && !isNaN(p.lng));
+        if (sameBldgPt) {
+          return { lat: sameBldgPt.lat, lng: sameBldgPt.lng };
+        }
+      }
+
+      const fullQuery = `${address}, ${city}, ${state} ${zip}`.trim();
+
+      try {
+        const res = await fetch(`https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?SingleLine=${encodeURIComponent(fullQuery)}&f=json&maxLocations=1`);
+        const data = await res.json();
+        if (data.candidates && data.candidates.length > 0) {
+          return { lat: data.candidates[0].location.y, lng: data.candidates[0].location.x };
+        }
+      } catch (e) {}
+
+      try {
+        const res2 = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(fullQuery)}&limit=1`);
+        const data2 = await res2.json();
+        if (data2.features && data2.features.length > 0) {
+          const [lng, lat] = data2.features[0].geometry.coordinates;
+          return { lat, lng };
+        }
+      } catch (e) {}
+
+      const cityKey = (city || '').toLowerCase().trim();
+      if (chicagolandCities[cityKey]) {
+        const [lat, lng] = chicagolandCities[cityKey];
+        return {
+          lat: lat + (Math.random() - 0.5) * 0.01,
+          lng: lng + (Math.random() - 0.5) * 0.01
+        };
+      }
+
+      const center = map.getCenter();
+      return { lat: center.lat, lng: center.lng };
+    }
+
+    // --- 12. MODAL & CRUD HANDLERS ---
+    function toggleSidebar() {
+      document.getElementById('pointsSidebar').classList.toggle('translate-x-full');
+    }
+    function openAddModal() {
+      document.getElementById('ocrStatusBox').classList.add('hidden');
+      document.getElementById('screenshotInput').value = '';
+      document.getElementById('addModal').classList.remove('hidden');
+    }
+    function closeAddModal() {
+      document.getElementById('addModal').classList.add('hidden');
+    }
+
+    function openDetailModal(pointId) {
+      closeAddModal();
+      const form = document.getElementById('woForm');
+      form.reset();
+      document.getElementById('screenshotPreviewBox').classList.add('hidden');
+      const sameBldgBanner = document.getElementById('sameBuildingModalBanner');
+      sameBldgBanner.classList.add('hidden');
+
+      const pt = points.find(p => p.id === pointId);
+      const deleteBtn = document.getElementById('deleteBtn');
+      const navLink = document.getElementById('modalNavLink');
+      const badge = document.getElementById('modalBadge');
+      const buildingMetaMap = computeSameBuildingGroups();
+
+      if (pt) {
+        const pinCode = getPinDisplayCode(pt);
+        const bMeta = buildingMetaMap[pt.id] || { isSameBuilding: false, effectiveHub: pt.fedexHub || '' };
+
+        badge.innerText = pinCode;
+        badge.className = `px-2.5 py-1 rounded-full text-xs font-extrabold text-white ${
+          bMeta.isSameBuilding
+            ? 'same-building-badge-glow'
+            : pt.category === 'home'
+              ? 'bg-red-600'
+              : pt.category === 'walmart'
+                ? 'bg-orange-500'
+                : 'bg-blue-600'
+        }`;
+
+        if (bMeta.isSameBuilding) {
+          const otherWOs = bMeta.siblings
+            .filter(s => s.id !== pt.id)
+            .map(s => `${s.woNumber}${s.address2 ? ' (' + s.address2 + ')' : ''}`)
+            .join(', ');
+          document.getElementById('sameBuildingModalText').innerText =
+            `🏢 Same Building (${bMeta.count} WOs here)! Also at this building: ${otherWOs}`;
+          sameBldgBanner.classList.remove('hidden');
+        }
+
+        document.getElementById('wo_id').value = pt.id;
+        document.getElementById('wo_lat').value = pt.lat;
+        document.getElementById('wo_lng').value = pt.lng;
+        document.getElementById('wo_category').value = pt.category || 'business';
+        document.getElementById('wo_sched').value = pt.sched || '';
+        document.getElementById('wo_address').value = pt.address || '';
+        document.getElementById('wo_address2').value = pt.address2 || '';
+        document.getElementById('wo_number').value = pt.woNumber || '';
+        document.getElementById('wo_fedex_pkg').value = pt.fedexPkg || '';
+        document.getElementById('wo_hub_hillside').checked = pt.fedexHub === 'hillside';
+        document.getElementById('wo_hub_downtown').checked = pt.fedexHub === 'downtown';
+        document.getElementById('wo_ticket').value = pt.ticket || '';
+        document.getElementById('wo_city').value = pt.city || '';
+        document.getElementById('wo_state').value = pt.state || 'IL';
+        document.getElementById('wo_zip').value = pt.zip || '';
+        document.getElementById('wo_name').value = pt.name || '';
+        document.getElementById('wo_email').value = pt.email || '';
+        document.getElementById('wo_phone').value = pt.phone || '';
+        document.getElementById('wo_phone2').value = pt.phone2 || '';
+        document.getElementById('wo_alt_name').value = pt.altName || '';
+        document.getElementById('wo_alt_phone').value = pt.altPhone || '';
+        document.getElementById('wo_notes').value = pt.notes || '';
+        document.getElementById('modalTitle').innerText = `${pt.woNumber || 'Point'} — ${pt.city}`;
+
+        if (pt.screenshot) {
+          document.getElementById('screenshotPreviewImg').src = pt.screenshot;
+          document.getElementById('screenshotPreviewBox').classList.remove('hidden');
+        }
+
+        navLink.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pt.address + ', ' + pt.city + ', ' + pt.state + ' ' + pt.zip)}`;
+        navLink.classList.remove('hidden');
+        deleteBtn.classList.remove('hidden');
+      } else {
+        badge.innerText = 'NEW';
+        badge.className = 'px-2.5 py-1 rounded-full text-xs font-extrabold text-white bg-blue-600';
+        document.getElementById('wo_id').value = '';
+        document.getElementById('wo_lat').value = '';
+        document.getElementById('wo_lng').value = '';
+        document.getElementById('wo_fedex_pkg').value = '';
+        document.getElementById('wo_hub_hillside').checked = false;
+        document.getElementById('wo_hub_downtown').checked = false;
+        document.getElementById('modalTitle').innerText = 'New WWTS Work Order';
+        navLink.classList.add('hidden');
+        deleteBtn.classList.add('hidden');
+      }
+      document.getElementById('detailModal').classList.remove('hidden');
+    }
+
+    function closeDetailModal() {
+      document.getElementById('detailModal').classList.add('hidden');
+    }
+
+    function focusNotes() {
+      document.getElementById('wo_notes').focus();
+    }
+
+    async function saveWorkOrder(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const saveBtn = document.getElementById('saveBtn');
+      saveBtn.innerText = 'Plotting Pin...';
+
+      const id = document.getElementById('wo_id').value || 'pt-' + Date.now();
+      const category = document.getElementById('wo_category').value;
+      const address = document.getElementById('wo_address').value;
+      const address2 = document.getElementById('wo_address2').value;
+      const city = document.getElementById('wo_city').value;
+      const state = document.getElementById('wo_state').value;
+      const zip = document.getElementById('wo_zip').value;
+
+      const fedexPkg = (document.getElementById('wo_fedex_pkg').value || '').trim().slice(-4);
+      const fedexHub = document.getElementById('wo_hub_hillside').checked
+        ? 'hillside'
+        : document.getElementById('wo_hub_downtown').checked
+          ? 'downtown'
+          : '';
+
+      let lat = parseFloat(document.getElementById('wo_lat').value);
+      let lng = parseFloat(document.getElementById('wo_lng').value);
+
+      const existingPt = points.find(p => p.id === id);
+      const addressChanged = !existingPt || existingPt.address !== address || existingPt.city !== city;
+
+      if (isNaN(lat) || isNaN(lng) || addressChanged) {
+        const coords = await geocodeAddress(address, city, state, zip);
+        lat = coords.lat;
+        lng = coords.lng;
+      }
+
+      if (category === 'home') {
+        points.forEach(p => { if (p.id !== id && p.category === 'home') p.category = 'business'; });
+      }
+
+      const newPt = {
+        id,
+        category,
+        sched: document.getElementById('wo_sched').value,
+        address, address2, city, state, zip, lat, lng,
+        woNumber: document.getElementById('wo_number').value || (category === 'home' ? 'HOME' : 'WA0000'),
+        fedexPkg,
+        fedexHub,
+        ticket: document.getElementById('wo_ticket').value,
+        name: document.getElementById('wo_name').value,
+        email: document.getElementById('wo_email').value,
+        phone: document.getElementById('wo_phone').value,
+        phone2: document.getElementById('wo_phone2').value,
+        altName: document.getElementById('wo_alt_name').value,
+        altPhone: document.getElementById('wo_alt_phone').value,
+        notes: document.getElementById('wo_notes').value,
+        screenshot: lastScreenshotDataUrl || (existingPt ? existingPt.screenshot : '')
+      };
+
+      lastScreenshotDataUrl = '';
+
+      const existingIdx = points.findIndex(p => p.id === id);
+      if (existingIdx >= 0) points[existingIdx] = newPt;
+      else points.push(newPt);
+
+      saveBtn.innerText = '💾 Save & Plot Pin';
+      closeDetailModal();
+      renderAll();
+      map.setView([lat, lng], 13);
+
+      if (overviewMode) renderOverviewFromHome();
+    }
+
+    function resetDemoPoints() {
+      if (confirm('Reset map to Downtown Chicago demo points (with Same-Building Hillside/Downtown coordination + Zoom Auto-Align)?')) {
+        points = JSON.parse(JSON.stringify(defaultPoints));
+        clearRouteLines();
+        renderAll();
+        map.setView([41.8720, -87.6750], 12);
+      }
+    }
+
+    // --- 13. CROSS-DEVICE SYNC (JSON EXPORT/IMPORT) ---
+    function exportPointsJSON() {
+      const blob = new Blob([JSON.stringify(points, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `wwts-work-orders-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+    }
+
+    function importPointsJSON(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          points = JSON.parse(e.target.result);
+          renderAll();
+        } catch (err) {
+          alert('Invalid JSON sync file.');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    renderAll();
+  </script>
+</body>
+</html>
