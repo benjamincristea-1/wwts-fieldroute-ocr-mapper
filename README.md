@@ -85,6 +85,6 @@ Clicking **`🌐 Overview All (From Home)`** calculates real road routes from th
 
 ## 🚀 Quick Start
 
-1. Clone this repository or download `index.html`.
+1. Clone this repository or download `index.html`. OR go to "https://benjamincristea-1.github.io/wwts-fieldroute-ocr-mapper/" (Github pages)
 2. Open `index.html` directly in any modern desktop or mobile web browser (no build step or server installation required).
 3. Click **`📦 Fedex Pickup`** to plot the **Hillside** or **Downtown** FedEx hubs, click **`🌐 Overview All (From Home)`** to view color-coded routes and drive times from North Lawndale, or click **`➕ Add Work Order`** to upload/paste a WWTS dispatch screenshot.
